@@ -1,0 +1,42 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+keys.json
+keys.*.json
+!keys.example.json
+!keys.*.example.json
+*.pem
+*.key
+
+# Dependencies and generated output
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.gradle/
+build/
+dist/
+target/
+coverage/
+*.log
+
+# Local Minecraft runtime, models, and user data: back up separately
+/runtime/
+/data/
+/models/
+/backups/
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
