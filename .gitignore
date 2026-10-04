@@ -32,6 +32,9 @@ coverage/
 /models/
 /backups/
 
+# Personal reference documents (local only)
+/local-docs/
+
 # Editor and operating-system files
 .idea/
 .vscode/

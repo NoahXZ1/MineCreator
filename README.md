@@ -32,7 +32,7 @@ This is the repo of LLM-based AI design and building tool for Minecraft
 
 ## 版本追踪与备份
 
-Stage 1 待实施方案见 [PDF 技术说明](output/pdf/MineCreator_Stage1_Technical_Guide.pdf)。文档覆盖 Paper + MCPQ + LLM API 的资源准备、接入步骤、注意事项与验收标准；它不表示相关功能已经实现。可通过 `python docs/generate_stage1_pdf.py` 重新生成（需要 ReportLab，默认使用 Windows 等线字体）。
+个人参考文档及其生成脚本统一放在 `local-docs/`，仅保留在本地，不纳入 Git 追踪。
 
 当前阶段为项目初始化，尚无功能实现。本地 Git 使用 `main` 分支，远程 `origin` 为 [NoahXZ1/MineCreator](https://github.com/NoahXZ1/MineCreator)。
 
