@@ -1,32 +1,32 @@
 # MineCreator
 
-面向 Minecraft 的 LLM 建筑设计与施工工具。
+An LLM-powered building design and construction tool for Minecraft.
 
-## 技术路线
+## Architecture
 
-Fabric + MCPFabric。Python 通过本机 HTTP 接口操作 Java 版单人世界，LLM 输出蓝图，程序校验并执行。建筑预览与施工使用同一份展开后的方块数据。
+Fabric + MCPFabric. Python controls a Minecraft Java single-player world through a local HTTP API. The LLM produces blueprints for the program to validate and execute. Preview and construction use the same expanded block data.
 
-## 已确认环境
+## Confirmed environment
 
-| 组件 | 版本 |
+| Component | Version |
 | --- | --- |
 | Python | 3.14.8 (64-bit) |
 | pip | 26.2.1 |
-| Minecraft Java 版客户端 | 26.3 |
-| Minecraft Launcher 自带 Java | Microsoft OpenJDK 25.0.1 |
+| Minecraft Java Edition client | 26.3 |
+| Java bundled with Minecraft Launcher | Microsoft OpenJDK 25.0.1 |
 | Fabric Loader | 0.19.5 |
 | Fabric API | 0.161.0+26.3 |
 | MCPFabric | 0.5.0+26.3 (Fabric) |
 
-## 当前进度
+## Current status
 
-已验证 Python → MCPFabric → 单人测试世界的读取、建造、修改和恢复。LLM API 尚未接入。
+Reading, building, modifying, and restoring blocks in a single-player test world have been verified through Python → MCPFabric. LLM API integration is pending.
 
-## 项目约束
+## Project constraints
 
-- 只生成原版方块、状态及方块实体；修改后的存档须通过同版本原版重开测试，无需手动转换。
-- 一次性安装 mod 和配置环境可以接受；日常建造、修改和检查由 GUI 自动执行。
-- 以单人短期开发为范围，不自行开发 Java mod；26.3 是当前测试版本，并非永久限制。
-- 施工须分阶段、可见地逐步放置方块，阶段之间回读检查并调整。
-- 保护玩家发令时的位置，持续检查当前位置，保留脚下支撑、活动空间和离开通道。
-- 先在附近寻找符合建筑要求的自然地形；找不到时再做必要的局部改造。
+- Generate only vanilla blocks, block states, and block entities. Modified saves must pass a reopening test in the same vanilla Minecraft version without manual conversion.
+- One-time mod installation and environment setup are acceptable. Routine construction, modification, and inspection must run automatically through the GUI.
+- Keep the scope manageable for a short solo project without developing a custom Java mod. Version 26.3 is the current test version, not a permanent restriction.
+- Build visibly in stages through gradual block placement, reading back and adjusting completed sections between stages.
+- Protect the player's position when the request is made and keep checking their current position. Preserve ground support, movement space, and an exit route.
+- First look nearby for natural terrain that suits the building. Make necessary local terrain changes only when a suitable site cannot be found.
