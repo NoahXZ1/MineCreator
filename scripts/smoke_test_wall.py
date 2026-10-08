@@ -1,4 +1,4 @@
-"""在新建测试存档里验证建造、修改、回读和恢复，最后保留测试墙。"""
+"""Verify construction, edits, readback, and restoration in a new test world; keep the test wall."""
 
 import argparse
 from datetime import datetime, timezone
@@ -31,7 +31,7 @@ def find_empty_area(client: MCPFabricClient, player: dict) -> tuple[dict, list[d
             blocks = read_wall(client, origin, player["dimension"])
             if all(block["id"] == "minecraft:air" for block in blocks):
                 return origin, blocks
-    raise RuntimeError("玩家附近未找到 5×3 的纯空气区域；请到空旷处再测试。")
+    raise RuntimeError("No empty 5-by-3 area found nearby; move to an open area.")
 
 
 def fill(client: MCPFabricClient, origin: dict, dimension: str, block_id: str, top_only: bool = False) -> dict:
@@ -41,7 +41,7 @@ def fill(client: MCPFabricClient, origin: dict, dimension: str, block_id: str, t
         "from": start, "to": end, "blockId": block_id, "dimension": dimension,
     })
     if result.get("success") is not True:
-        raise RuntimeError(f"区域写入未成功：{result.get('output', [])}")
+        raise RuntimeError(f"Region write failed: {result.get('output', [])}")
     return result
 
 
@@ -52,13 +52,13 @@ def verify(blocks: list[dict], origin: dict, phase: str) -> None:
             else "minecraft:stone"
         )
         if block["id"] != expected or block.get("properties", {}) != {}:
-            raise RuntimeError(f"回读不一致：({block['x']}, {block['y']}, {block['z']}) 应为 {expected}。")
+            raise RuntimeError(f"Readback mismatch: ({block['x']}, {block['y']}, {block['z']}) should be {expected}.")
 
 
 def run_test(client: MCPFabricClient) -> dict:
     status = client.call("info.status")
     if not status.get("integratedServer") or "world_write" not in status.get("capabilities", []):
-        raise RuntimeError("请进入已启用写入接口的单人测试世界。")
+        raise RuntimeError("Enter a single-player test world with world writes enabled.")
     player = client.call("player.getState")
     dimension = player["dimension"]
     origin, original = find_empty_area(client, player)
@@ -75,7 +75,7 @@ def run_test(client: MCPFabricClient) -> dict:
     def save() -> None:
         record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    save()  # 先记录原始空气区域，再发送写入请求。
+    save()  # Record the original air region before sending writes.
     try:
         fill(client, origin, dimension, "minecraft:stone")
         verify(read_wall(client, origin, dimension), origin, "built")
@@ -95,7 +95,7 @@ def run_test(client: MCPFabricClient) -> dict:
         record["phase"] = "restored"
         save()
 
-        # 恢复验证完成后，再建一次，供玩家在游戏里查看。
+        # Rebuild after restoration checks so the player can inspect the wall.
         fill(client, origin, dimension, "minecraft:stone")
         fill(client, origin, dimension, "minecraft:glass", top_only=True)
         record["final_blocks"] = read_wall(client, origin, dimension)
@@ -107,8 +107,8 @@ def run_test(client: MCPFabricClient) -> dict:
         record["phase"] = "failed"
         record["error"] = str(exc)
         save()
-        raise RuntimeError(f"测试未通过，已保存原始状态和进度：{record_path}；{exc}") from None
-    return {"检查通过": True, "维度": dimension, "墙的起点": origin, "大小": "5×3×1", "验证": record["checks"], "记录": str(record_path)}
+        raise RuntimeError(f"Check failed; original state and progress saved: {record_path}; {exc}") from None
+    return {"check_passed": True, "dimension": dimension, "wall_origin": origin, "size": "5×3×1", "checks": record["checks"], "record": str(record_path)}
 
 
 def main() -> int:
@@ -117,13 +117,13 @@ def main() -> int:
     parser.add_argument("--game-dir", type=Path, default=default_dir)
     args = parser.parse_args()
     if args.game_dir is None:
-        parser.error("请通过 --game-dir 指定 Minecraft 游戏目录。")
+        parser.error("Specify the Minecraft game directory with --game-dir.")
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     try:
         report = run_test(MCPFabricClient(args.game_dir))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-        print(f"检查未通过：{exc}")
+        print(f"Connection check failed: {exc}")
         return 1
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

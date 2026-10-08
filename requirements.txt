@@ -1,2 +1,5 @@
-# Stage 1 使用 Python 标准库连接 MCPFabric，无需额外依赖。
-# 选定 LLM API 平台后，再添加相应依赖。
+# MCPFabric uses the Python standard library. OpenAI planning dependencies:
+openai==3.24.0
+pydantic==2.13.5
+python-dotenv==1.2.4
+Pillow==12.3.0

@@ -1,4 +1,4 @@
-"""分段精修正面、门廊和混合照明；逐块施工并避开玩家。"""
+"""Refine the facade, porch, and mixed lighting in stages while protecting the player."""
 import argparse
 import json
 import os
@@ -95,7 +95,7 @@ def design(stage):
 
 def run(stage):
     c=MCPFabricClient(Path(os.environ['APPDATA'])/'.minecraft')
-    if not c.call('info.status').get('integratedServer'):raise RuntimeError('未进入单人世界')
+    if not c.call('info.status').get('integratedServer'):raise RuntimeError('No single-player world is open.')
     pending=DATA/('exterior-'+stage+'-pending.json')
     targets={tuple(t[:3]):t[3] for t in json.loads(pending.read_text())} if pending.exists() else design(stage)
     original=json.loads((DATA/'exterior-detail-request-position.json').read_text())
@@ -103,16 +103,16 @@ def run(stage):
     for i,(xyz,block) in enumerate(targets.items()):
         x,y,z=xyz
         if i%3==0:p=c.call('player.getState')
-        if p['dimension']!=DIM:raise RuntimeError('玩家维度变化，暂停施工')
+        if p['dimension']!=DIM:raise RuntimeError('The player changed dimensions; construction paused.')
         near=lambda q:abs(x-q['x'])<1.8 and abs(z-q['z'])<1.8 and q['y']-1.1<=y<q['y']+2.8
         if near(p) or near(original):deferred[xyz]=block;continue
         req=PLAN['request_position']
-        if abs(x-req['x'])<4 and abs(z-req['z'])<4:raise RuntimeError('初始发令位置保护范围')
+        if abs(x-req['x'])<4 and abs(z-req['z'])<4:raise RuntimeError('The block is inside the protected request position.')
         params=dict(x=x,y=y,z=z,dimension=DIM);old=c.call('world.getBlock',params)
         name=block.split('[')[0]
         props=dict(t.split('=') for t in block.split('[')[1].rstrip(']').split(',')) if '[' in block else {}
         if old['id']==name and all(old.get('properties',{}).get(k)==v for k,v in props.items()):applied.append((params,name,props));continue
-        if old['id'] in {'minecraft:chest','minecraft:barrel','minecraft:furnace','minecraft:smoker','minecraft:hopper','minecraft:spawner'}:raise RuntimeError(f'保留现有功能方块：{xyz}')
+        if old['id'] in {'minecraft:chest','minecraft:barrel','minecraft:furnace','minecraft:smoker','minecraft:hopper','minecraft:spawner'}:raise RuntimeError(f'Preserving the existing functional block: {xyz}')
         r=c.call('world.setBlock',dict(params,blockId=block))
         if not r.get('success'):raise RuntimeError(str(r))
         applied.append((params,name,props));changed+=1
@@ -125,7 +125,7 @@ def run(stage):
     pending.write_text(json.dumps([list(k)+[v] for k,v in deferred.items()]))
     (DATA/('exterior-'+stage+'-check.json')).write_text(json.dumps(dict(changed=changed,verified=len(applied)-len(issues),issues=issues,deferred=len(deferred))))
     print(stage,'changed',changed,'verified',len(applied)-len(issues),'deferred',len(deferred),'issues',issues,flush=True)
-    if issues:raise RuntimeError('部分装饰未保持预期状态，需要修正')
+    if issues:raise RuntimeError('Some decoration blocks differ from their expected state and need correction.')
 
 if __name__=='__main__':
     a=argparse.ArgumentParser(description=__doc__);a.add_argument('stage');run(a.parse_args().stage)

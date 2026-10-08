@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="minecreator-token" content="__APP_TOKEN__">
+  <title>MineCreator</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar stone">
+    <div class="brand"><img src="/icon.svg" alt="" width="42" height="42"><h1>MineCreator</h1></div>
+    <div class="top-actions"><span class="game-status" id="game-status">Minecraft not checked</span><button id="settings" class="icon-button" aria-label="Settings" title="Settings">⚙</button></div>
+  </header>
+  <main class="workspace">
+    <aside class="sidebar stone panel">
+      <h2>Conversations</h2>
+      <button id="new-chat" class="green new-chat"><span>＋</span>New chat</button>
+      <nav id="conversations" aria-label="Saved conversations"></nav>
+      <div class="sidebar-foot"><span class="status-dot"></span>Saved on this computer</div>
+    </aside>
+    <section class="chat panel" aria-label="Conversation">
+      <header class="chat-header"><h2 id="chat-title">New conversation</h2><p>Build ideas, one block at a time.</p></header>
+      <div id="messages" class="messages" role="log" aria-label="Messages" aria-live="off"></div>
+      <div class="composer stone">
+        <div id="feedback" class="feedback" role="status" aria-live="polite">Loading your workspace...</div>
+        <form id="chat-form">
+          <textarea id="prompt" maxlength="8000" rows="3" aria-label="Message" placeholder="Describe what you'd like to build..."></textarea>
+          <button id="send" class="green" type="submit">Send<span>↵</span></button>
+        </form>
+        <div class="composer-foot"><span>Enter to send · Shift + Enter for a new line</span><button id="stop" class="text-button" hidden>Stop</button></div>
+      </div>
+    </section>
+    <aside class="design stone panel">
+      <h2>Design</h2>
+      <div class="design-scroll">
+        <section id="build-status" class="build-status" aria-label="Construction status" hidden>
+          <h3>Construction</h3><p id="build-location"></p><p id="build-message" role="status"></p>
+          <progress id="build-progress" max="1" aria-label="Current construction stage"></progress>
+        </section>
+        <div id="preview-tabs" class="preview-tabs" hidden><button id="blocks-tab" class="selected">Blocks</button><button id="concept-tab" disabled>AI concept</button></div>
+        <div id="design-preview" class="design-preview"><img src="/icon.svg" alt="" width="64" height="64"><h3>Your next build starts here.</h3><p>Discuss the shape, materials,<br>and details in the conversation.</p><span class="tag">DESIGN WORKSPACE</span></div>
+        <p id="preview-caption" class="preview-caption">Discuss an idea, then generate a plan.</p>
+        <div id="plan-details" hidden></div>
+        <p id="design-notice" class="design-notice" role="status" hidden></p>
+      </div>
+      <button id="generate-plan" class="green future" disabled><span>▤</span><span id="plan-button-label">Generate plan</span></button>
+      <button id="generate-image" class="future image-action" title="Generate one AI concept image through your API." hidden disabled>Generate AI image</button>
+      <button id="build" class="green future" title="Start building the saved plan nearby. Left-click or right-click." disabled><span>⚒</span>Build</button>
+      <p class="coming-next">Build starts now. Chat “start build” reviews first. May clear and level nearby terrain.</p>
+      <div class="model-card"><span class="eyebrow">CHAT MODEL</span><strong id="model">Loading...</strong><span id="api-state">Reading local settings</span></div>
+    </aside>
+  </main>
+  <dialog id="settings-dialog">
+    <div class="dialog-head"><h2>Settings</h2><button id="close-settings" class="icon-button" aria-label="Close settings">×</button></div>
+    <p>Chat uses the OpenAI configuration in this project's <code>.env</code> file.</p>
+    <dl><dt>Model</dt><dd id="settings-model">—</dd><dt>API key</dt><dd id="settings-key">—</dd><dt>Conversations</dt><dd>Saved locally in data/conversations/</dd></dl>
+    <p class="muted">Send and Generate plan use the OpenAI API. Asking for a preview in chat can generate one AI image. Generate AI image is also available as a button. Block previews render locally. Requests are never retried automatically.</p>
+    <div class="dialog-actions"><button id="refresh-settings">Reload settings</button><button id="quit">Quit MineCreator</button></div>
+  </dialog>
+  <dialog id="preview-dialog" class="preview-dialog"><div class="dialog-head"><h2 id="preview-dialog-title">Block preview</h2><button id="close-preview" class="icon-button" aria-label="Close preview">×</button></div><img id="large-preview" alt="Building plan preview"><p id="large-caption" class="muted"></p></dialog>
+</body>
+</html>

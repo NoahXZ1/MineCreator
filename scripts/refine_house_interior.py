@@ -1,4 +1,4 @@
-"""在现有木屋上精修室内；每次执行一个可见的小阶段。"""
+"""Refine the existing house interior in small visible stages."""
 import argparse
 import json
 import os
@@ -148,7 +148,7 @@ def design(stage):
 
 def run(stage):
     c=MCPFabricClient(Path(os.environ['APPDATA'])/'.minecraft')
-    if not c.call('info.status').get('integratedServer'): raise RuntimeError('请先进入单人存档')
+    if not c.call('info.status').get('integratedServer'): raise RuntimeError('Enter a single-player world first.')
     path=DATA/('detail-'+stage+'-pending.json')
     targets={tuple(v[:3]):v[3] for v in json.loads(path.read_text())} if path.exists() else design(stage)
     applied=[];deferred={};count=0
@@ -157,9 +157,9 @@ def run(stage):
     for i,(xyz,block) in enumerate(targets.items()):
         x,y,z=xyz
         if i%3==0:p=c.call('player.getState')
-        if p['dimension']!=DIM:raise RuntimeError('玩家已离开当前维度，停止施工')
+        if p['dimension']!=DIM:raise RuntimeError('The player left the current dimension; construction stopped.')
         req=PLAN['request_position']
-        if abs(x-req['x'])<4 and abs(z-req['z'])<4:raise RuntimeError('发令位置保护范围')
+        if abs(x-req['x'])<4 and abs(z-req['z'])<4:raise RuntimeError('The block is inside the protected request position.')
         near=lambda q: abs(x-q['x'])<1.8 and abs(z-q['z'])<1.8 and q['y']-1.1<=y<q['y']+2.8
         if near(p) or near(original):deferred[xyz]=block;continue
         params=dict(x=x,y=y,z=z,dimension=DIM)
@@ -168,7 +168,7 @@ def run(stage):
         props=dict(s.split('=') for s in block.split('[')[1].rstrip(']').split(',')) if '[' in block else {}
         if old['id']==name and all(old.get('properties',{}).get(k)==v for k,v in props.items()):applied.append((params,name,props));continue
         if old['id'] in {'minecraft:chest','minecraft:barrel','minecraft:furnace','minecraft:smoker','minecraft:hopper','minecraft:spawner'}:
-            raise RuntimeError(f'保留已有功能方块和内容，需调整装饰位置：{xyz}')
+            raise RuntimeError(f'Preserving the existing functional block and contents; relocate the decoration: {xyz}')
         r=c.call('world.setBlock',dict(params,blockId=block))
         if not r.get('success'):raise RuntimeError(str(r))
         applied.append((params,name,props));count+=1
@@ -182,7 +182,7 @@ def run(stage):
     path.write_text(json.dumps([list(k)+[v] for k,v in deferred.items()]))
     (DATA/('detail-'+stage+'-check.json')).write_text(json.dumps(dict(changed=count,verified=len(applied)-len(issues),deferred=len(deferred),issues=issues)))
     print(stage,'changed',count,'verified',len(applied)-len(issues),'deferred',len(deferred),'issues',issues,flush=True)
-    if issues:raise RuntimeError('部分装饰回读不一致，需要修正')
+    if issues:raise RuntimeError('Some decoration blocks failed readback and need correction.')
 
 if __name__=='__main__':
     a=argparse.ArgumentParser(description=__doc__);a.add_argument('stage');run(a.parse_args().stage)

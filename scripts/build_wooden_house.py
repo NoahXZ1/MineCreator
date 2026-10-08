@@ -1,4 +1,4 @@
-"""测试存档中的示例木屋：分阶段、逐块施工，并检查玩家距离。"""
+"""Example wooden house in the test world: gradual staged construction with player protection."""
 import argparse
 import json
 import os
@@ -262,7 +262,7 @@ def generate(stage):
 def run(stage, limit):
     client = MCPFabricClient(Path(os.environ['APPDATA'])/'.minecraft')
     status = client.call('info.status')
-    if not status.get('integratedServer'): raise RuntimeError('未进入单人存档')
+    if not status.get('integratedServer'): raise RuntimeError('No single-player world is open.')
     targets = generate(stage)
     pending_path = DATA / (stage + '-pending.json')
     if pending_path.exists():
@@ -273,9 +273,9 @@ def run(stage, limit):
         if changed>=limit:
             deferred[x,y,z]=block; continue
         if i%4==0: player=client.call('player.getState')
-        if player['dimension']!=DIM: raise RuntimeError('玩家维度已变化，停止施工')
+        if player['dimension']!=DIM: raise RuntimeError('The player changed dimensions; construction stopped.')
         req=PLAN['request_position']
-        if abs(x-req['x'])<4 and abs(z-req['z'])<4: raise RuntimeError('触及发令位置保护范围')
+        if abs(x-req['x'])<4 and abs(z-req['z'])<4: raise RuntimeError('The block is inside the protected request position.')
         if abs(x-player['x'])<2.5 and abs(z-player['z'])<2.5:
             deferred[x,y,z]=block; continue
         params=dict(x=x,y=y,z=z,dimension=DIM)
@@ -288,7 +288,7 @@ def run(stage, limit):
         if old['id']==name and all(old.get('properties',{}).get(k)==v for k,v in properties.items()):
             applied.append((params,name,properties)); continue
         if old['id'] in {'minecraft:chest','minecraft:barrel','minecraft:furnace','minecraft:smoker','minecraft:hopper','minecraft:spawner'}:
-            raise RuntimeError(f'已有功能方块，停止覆盖：{x},{y},{z}')
+            raise RuntimeError(f'Existing functional block; overwrite stopped: {x},{y},{z}')
         result=client.call('world.setBlock',dict(params,blockId=block))
         if not result.get('success'): raise RuntimeError(str(result))
         applied.append((params,name,properties)); changed+=1
@@ -298,7 +298,7 @@ def run(stage, limit):
         actual=client.call('world.getBlock',params)
         check={k:v for k,v in properties.items() if not (name=='minecraft:farmland' and k=='moisture')}
         if actual['id']!=name or any(actual.get('properties',{}).get(k)!=v for k,v in check.items()):
-            raise RuntimeError(f'回读不一致: {params}; expected={name},{check}; actual={actual}')
+            raise RuntimeError(f'Readback mismatch: {params}; expected={name},{check}; actual={actual}')
     pending_path.write_text(json.dumps([list(p)+[b] for p,b in deferred.items()]),encoding='utf-8')
     print(f'{stage}: VERIFIED {len(applied)}, CHANGED {changed}, REMAINING {len(deferred)}',flush=True)
     if not deferred:
