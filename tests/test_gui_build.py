@@ -91,6 +91,19 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(any(event.data.get('phase') == 'stage_verified' for event in self.events))
         self.assertTrue(all(event.data.get('scope') == 'build' for event in self.events))
 
+    def test_progress_disk_failure_stops_writes_and_keeps_parseable_log(self):
+        import json
+        from pathlib import Path
+        self.setup_build();original=Path.replace
+        def fail_log(path,target):
+            if path.parent==self.root/'data'/'builds' and self.game.writes:raise OSError('Disk unavailable')
+            return original(path,target)
+        with patch.object(Path,'replace',fail_log),self.assertRaises(OSError):self.build()
+        self.assertEqual(len(self.game.writes),1)
+        logs=list((self.root/'data'/'builds').glob('*.json'));self.assertEqual(len(logs),1)
+        self.assertNotEqual(json.loads(logs[0].read_text(encoding='utf-8'))['phase'],'completed')
+        self.assertFalse(list((self.root/'data'/'builds').glob('*.tmp')))
+
     def test_stop_preserves_blocks_and_never_restarts_request(self):
         self.setup_build()
         request_id = uuid4().hex

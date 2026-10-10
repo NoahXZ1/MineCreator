@@ -18,7 +18,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class MCPFabricClient:
     def __init__(self, game_dir: Path, timeout: float = 15):
         config_path = game_dir / "config" / "mcpfabric.config.json"
-        config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            raise ValueError('MCPFabric configuration was not found. Check the game directory in Settings and launch Minecraft with the mod once.') from None
+        except (ValueError, OSError):
+            raise ValueError('MCPFabric configuration could not be read. Check the selected game directory and mod configuration.') from None
         if config.get("host") not in {"127.0.0.1", "localhost"}:
             raise RuntimeError("Stage 1 connects only to a localhost API.")
         port = config.get("port")
@@ -51,6 +56,8 @@ class MCPFabricClient:
                 envelope = json.load(response)
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"{method}: HTTP {exc.code}; check API and authentication settings.") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            raise RuntimeError('Minecraft MCPFabric is unreachable. Open the game with the mod, enter a single-player world, and check the game directory in Settings.') from None
         if envelope.get("ok") is not True:
             error = envelope.get("error", {})
             raise RuntimeError(

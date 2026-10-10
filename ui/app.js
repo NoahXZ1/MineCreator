@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="minecreator-token"]').content;
 const state = {selected:null, record:null, active:null, stream:'', cursor:0, busy:false, config:null, pollTimer:null, selection:0,
-  previewKind:'blocks', previewKey:null, previewUrl:null, previewTicket:0, chatPreviewUrl:null};
+  previewKey:null, previewUrl:null, previewTicket:0, chatPreviewUrl:null};
 
 async function api(path, body) {
   let response;
@@ -32,6 +32,12 @@ function controls() {
   $('generate-image').disabled=state.busy || !state.config?.configured || !state.record?.design;
   $('build').disabled=state.busy || !state.record?.design || hasDraft;
   $('build').title=hasDraft?'Send or clear your draft first.':'Start building the saved plan nearby. Left-click or right-click.';
+  $('edit-target').disabled=state.busy;
+  $('save-library').disabled=state.busy || !state.record?.design;
+  $('save-settings').disabled=state.busy;
+  $('check-connection').disabled=state.busy;
+  $('apply-edit').disabled=state.busy || hasDraft || !(state.record?.edit_review?.change_count>0);
+  drawDesignStatus();
 }
 function scrollBottom() { $('messages').scrollTop=$('messages').scrollHeight; }
 function message(role, text, timestamp, turnId) {
@@ -50,6 +56,7 @@ function message(role, text, timestamp, turnId) {
   row.append(avatar,content); return row;
 }
 function drawMessages(record) {
+  const activity=$('conversation-details');activity.remove();
   $('messages').replaceChildren();
   $('chat-title').textContent=record.title;
   if (!record.turns.length) {
@@ -74,6 +81,7 @@ function drawMessages(record) {
     }
     $('messages').append(reply);
   }
+  $('messages').append(activity);
   if(state.active?.operation==='chat' && state.active.conversation_id===record.id && state.stream) showStream();
   scrollBottom();
 }
@@ -82,7 +90,7 @@ function showStream() {
   let row=[...$('messages').querySelectorAll('.message')].find(node=>node.dataset.turn===state.active.id && node.dataset.role==='assistant');
   if(!row) {
     $('messages').querySelector('.empty-state')?.remove();
-    row=message('assistant','',new Date().toISOString(),state.active.id);$('messages').append(row);
+    row=message('assistant','',new Date().toISOString(),state.active.id);$('messages').insertBefore(row,$('conversation-details'));
   }
   const nearBottom=$('messages').scrollHeight-$('messages').scrollTop-$('messages').clientHeight<110;
   row.querySelector('.message-text').textContent=state.stream || 'Waiting for a reply...';
@@ -92,26 +100,25 @@ async function selectConversation(id) {
   const selection=++state.selection;
   const record=await api(`/api/conversations/${id}`);
   if(selection!==state.selection)return;
-  if(state.selected!==id || state.record?.design?.id!==record.design?.id)state.previewKind='blocks';
   state.selected=id;state.record=record;localStorage.setItem('minecreator-conversation',id);
   drawMessages(record);
-  drawDesign(record);controls();
+  drawDesign(record);controls();scrollBottom();
   [...$('conversations').children].forEach(button=>button.classList.toggle('active',button.dataset.id===id));
 }
 
 function drawDesign(record) {
   const plan=record.design;
-  const details=$('plan-details');details.replaceChildren();details.hidden=!plan;
-  $('preview-tabs').hidden=!plan;
+  const details=$('plan-details');details.replaceChildren();$('plan-summary').hidden=!plan;
   $('generate-image').hidden=!plan;
   $('plan-button-label').textContent=plan?'Regenerate plan':'Generate plan';
   $('generate-image').textContent=plan?.image_id?'Regenerate AI image':'Generate AI image';
-  $('concept-tab').disabled=!plan?.image_id;
   const notices=[];
   if(record.design_error)notices.push(record.design_error);
   const latestAttempt=record.designs?.at(-1);
   if(latestAttempt?.status==='pending')notices.push('Generating a new version...');
   else if(latestAttempt?.error && latestAttempt.id!==plan?.id)notices.push(latestAttempt.error);
+  const imageAttempt=latestAttempt?.images?.at(-1);
+  if(imageAttempt?.error)notices.push(imageAttempt.error);
   if(plan) {
     details.append(element('div','plan-version',`VERSION ${plan.version} · SAVED`),element('h3','plan-title',plan.title),element('p','plan-description',plan.description));
     const stats=element('div','plan-stats');
@@ -128,19 +135,77 @@ function drawDesign(record) {
       const row=element('li');row.append(element('strong','',stage.name),element('span','',`${stage.count} placements · ${stage.description}`));stages.append(row);
     }
     details.append(materials,element('h4','','Construction stages'),stages);
-    if(plan.needs_regeneration && !record.build_review)notices.push('New messages since this plan. Regenerate to include them.');
+    if(plan.has_block_preview){
+      const blockPreview=element('button','chat-preview-link','View block preview');
+      blockPreview.onclick=()=>openBlockPreview(record.id,plan).catch(error=>feedback(error.message,'error'));details.append(blockPreview);
+    }
+    if(plan.needs_regeneration && !record.build_review && !record.edit_review)notices.push('New messages since this plan. Regenerate to include them.');
     if(plan.preview_error)notices.push(plan.preview_error);
-    if(state.previewKind==='concept'&&!plan.image_id)state.previewKind='blocks';
     loadPreview(plan);
   } else {
-    resetPreview();
-    const area=$('design-preview');area.classList.remove('populated');area.replaceChildren();
-    const icon=element('img');icon.src='/icon.svg';icon.alt='';icon.width=64;icon.height=64;
-    area.append(icon,element('h3','','Your next build starts here.'),element('p','','Discuss the shape, materials, and details in the conversation.'),element('span','tag','DESIGN WORKSPACE'));
-    $('preview-caption').textContent='Discuss an idea, then generate a plan.';
+    emptyConcept();
   }
   $('design-notice').hidden=!notices.length;$('design-notice').textContent=notices.join('\n');
   drawBuild(record.builds?.at(-1));
+  drawEdit(record);
+  if(typeof drawReferences==='function')drawReferences(record);
+  $('conversation-details').hidden=!(plan || notices.length || record.builds?.length || record.edits?.length || record.references?.length);
+  drawDesignStatus();
+}
+function drawDesignStatus(){
+  const record=state.record,job=state.active?.conversation_id===state.selected?state.active:null;
+  const edits=record?.edits || [],builds=record?.builds || [];
+  let text='Ready';
+  if(job){
+    text=job.operation==='apply_edit' || edits.some(e=>e.id===job.id)?'Editing...':
+      job.operation==='design_build' || builds.some(b=>b.id===job.id)?'Building...':
+      job.operation==='connection'?'Checking connection...':'Designing...';
+  }else if(record?.edit_review || record?.build_review)text='Awaiting confirmation';
+  else{
+    const latest=[...builds,...edits].sort((a,b)=>(a.updated_at || a.created_at || '').localeCompare(b.updated_at || b.created_at || '')).at(-1);
+    const attempt=record?.designs?.at(-1);
+    if(record?.design_error || attempt?.error || attempt?.images?.at(-1)?.error)text='Needs attention';
+    else if(latest?.status==='running')text=edits.includes(latest)?'Editing...':'Building...';
+    else if(record?.design && latest?.design_id && latest.design_id!==record.design.id && record.design.created_at>latest.created_at)text='Ready to build';
+    else if(latest?.status==='failed')text='Needs attention';
+    else if(['cancelled','interrupted'].includes(latest?.status))text='Stopped';
+    else if(latest?.status==='completed')text='Completed';
+    else if(attempt?.status==='pending')text='Designing...';
+    else if(record?.design)text='Ready to build';
+  }
+  $('design-status').textContent=text;
+}
+function drawEdit(record) {
+  const targets=(record.builds || []).filter(item=>item.status==='completed' && item.record_path);
+  $('edit-target-panel').hidden=!targets.length;
+  const select=$('edit-target');select.replaceChildren();
+  targets.forEach((item,index)=>{
+    const option=element('option','',`Build ${index+1} · ${(item.origin || []).join(', ')} · ${item.dimension || ''}`);
+    option.value=item.id;option.title=option.textContent;select.append(option);
+  });
+  select.value=record.edit_target?.id || record.selected_build_id || targets.at(-1)?.id || '';
+  select.title=select.selectedOptions[0]?.textContent || '';
+  $('edit-review').hidden=!record.edit_review;
+  const review=record.edit_review;
+  $('edit-summary').textContent=review?`${review.change_count} changed blocks: ${review.counts.added} added, ${review.counts.removed} removed, ${review.counts.replaced} replaced.\nReview the full description in chat, then confirm below or reply in chat.`:'';
+  drawEditProgress(record.edits?.at(-1));
+}
+function drawEditProgress(edit) {
+  $('edit-status').hidden=!edit;
+  if(!edit)return;
+  $('edit-message').textContent=edit.message || 'Checking the target building...';
+  const progress=$('edit-progress');progress.hidden=edit.status!=='running';
+  if(edit.total>0 && Number.isFinite(edit.current)){progress.max=edit.total;progress.value=edit.current;}
+  else progress.removeAttribute('value');
+}
+function editEvent(event,job) {
+  if(state.selected!==job.conversation_id || !state.record)return;
+  const edits=state.record.edits || (state.record.edits=[]);
+  let edit=edits.find(item=>item.id===job.id);
+  if(!edit){edit={id:job.id,status:'running'};edits.push(edit);}
+  if(edit.phase!==event.data.phase){delete edit.current;delete edit.total;}
+  Object.assign(edit,event.data,{message:event.message});drawEditProgress(edit);
+  $('conversation-details').hidden=false;$('edit-target-panel').hidden=false;drawDesignStatus();
 }
 function drawBuild(build) {
   $('build-status').hidden=!build;
@@ -162,6 +227,7 @@ function buildEvent(event, job) {
   if(build.phase!==event.data.phase || build.stage!==event.data.stage){delete build.current;delete build.total;}
   Object.assign(build,event.data,{message:event.message});
   drawBuild(build);
+  $('conversation-details').hidden=false;drawDesignStatus();
 }
 function resetPreview() {
   state.previewTicket++;
@@ -179,29 +245,38 @@ async function openChatPreview(preview) {
   $('large-caption').textContent='AI illustration of the saved blueprint, not an in-game screenshot.';
   $('preview-dialog').showModal();
 }
+async function openBlockPreview(conversationId,plan){
+  const response=await fetch(`/api/preview/${conversationId}/${plan.id}/blocks`,{headers:{'X-MineCreator-Token':token}});
+  if(!response.ok)throw new Error('This block preview could not be loaded.');
+  const blob=await response.blob();
+  if(state.chatPreviewUrl)URL.revokeObjectURL(state.chatPreviewUrl);
+  state.chatPreviewUrl=URL.createObjectURL(blob);$('large-preview').src=state.chatPreviewUrl;
+  $('preview-dialog-title').textContent=plan.title;$('large-caption').textContent='Actual block geometry';$('preview-dialog').showModal();
+}
+function emptyConcept(text='No concept image yet.'){
+  resetPreview();const area=$('design-preview');area.classList.remove('populated');
+  const icon=element('img');icon.src='/icon.svg';icon.alt='';icon.width=64;icon.height=64;
+  area.replaceChildren(icon,element('p','',text));
+}
 async function loadPreview(plan) {
-  const kind=state.previewKind;
-  $('blocks-tab').classList.toggle('selected',kind==='blocks');
-  $('concept-tab').classList.toggle('selected',kind==='concept');
-  const caption=kind==='blocks'?'Actual block geometry · click to enlarge.':'AI concept · may differ from the built structure.';
-  $('preview-caption').textContent=caption;
-  const key=`${state.selected}/${plan.id}/${kind}/${kind==='concept'?plan.image_id:''}`;
+  if(!plan.image_id){emptyConcept();return;}
+  const caption='AI concept · may differ from the built structure.';
+  const key=`${state.selected}/${plan.id}/concept/${plan.image_id}`;
   if(state.previewKey===key)return;
   resetPreview();state.previewKey=key;
   const ticket=state.previewTicket,conversationId=state.selected;
-  const area=$('design-preview');area.classList.add('populated');area.replaceChildren(element('p','',kind==='blocks'&&!plan.has_block_preview?'Block preview unavailable.':'Loading preview...'));
-  if(kind==='blocks'&&!plan.has_block_preview)return;
+  const area=$('design-preview');area.classList.add('populated');area.replaceChildren(element('p','','Loading preview...'));
   try {
-    const response=await fetch(`/api/preview/${conversationId}/${plan.id}/${kind}`,{headers:{'X-MineCreator-Token':token}});
+    const response=await fetch(`/api/preview/${conversationId}/${plan.id}/concept`,{headers:{'X-MineCreator-Token':token}});
     if(!response.ok)throw new Error('Preview could not be loaded.');
     const blob=await response.blob();
     if(ticket!==state.previewTicket)return;
     const url=URL.createObjectURL(blob);state.previewUrl=url;
-    const image=element('img','preview-image');image.src=url;image.alt=kind==='blocks'?`Block preview of ${plan.title}`:`AI concept of ${plan.title}`;
+    const image=element('img','preview-image');image.src=url;image.alt=`AI concept of ${plan.title}`;
     const button=element('button','preview-image-button');button.type='button';button.setAttribute('aria-label','Enlarge preview');button.append(image);
     button.onclick=()=>{$('large-preview').src=url;$('preview-dialog-title').textContent=plan.title;$('large-caption').textContent=caption;$('preview-dialog').showModal();};
     area.replaceChildren(button);
-  }catch(error){if(ticket===state.previewTicket){state.previewKey=null;const retry=element('button','','Reload preview');retry.onclick=()=>loadPreview(plan);area.replaceChildren(element('p','',error.message),retry);}}
+  }catch(error){if(ticket===state.previewTicket){emptyConcept('Preview unavailable.');feedback(error.message,'error');}}
 }
 function drawCatalog(items) {
   $('conversations').replaceChildren();
@@ -229,6 +304,7 @@ async function createConversation() {
 function attachJob(job) {
   state.active={...job,operation:job.operation || 'chat'};state.cursor=0;state.stream='';state.busy=true;controls();
   feedback(job.operation==='design_build'?'Checking Minecraft and selecting a nearby site.':job.operation==='design_plan'?'Generating a plan from the conversation...':job.operation==='design_image'?'Generating an AI concept image...':'Waiting for the model. No automatic retries.','busy');
+  if(job.operation==='apply_edit')feedback('Checking the building and applying the reviewed edit...','busy');
   clearTimeout(state.pollTimer);pollJob();
 }
 async function pollJob() {
@@ -238,6 +314,7 @@ async function pollJob() {
     state.cursor=result.cursor;
     for(const event of result.events) {
       if(event.data?.scope==='build')buildEvent(event,job);
+      if(event.data?.scope==='edit')editEvent(event,job);
       if(event.kind==='replace_text' && job.operation==='chat') {state.stream=event.data.text;showStream();}
       else if(event.kind==='delta' && job.operation==='chat') {state.stream+=event.data.text;showStream();feedback('MineCreator is replying...','busy');}
       else if(event.kind==='status' || event.kind==='progress')feedback(event.message,'busy');
@@ -248,19 +325,34 @@ async function pollJob() {
       state.active=null;state.busy=false;
       const outcome=result.outcome;
       const chatPreview=outcome.result?.preview;
-      if(outcome.status==='completed' && (job.operation==='design_image' || (chatPreview && chatPreview.design_id===state.record?.design?.id)) && state.selected===job.conversation_id) {state.previewKind='concept';drawDesign(state.record);}
+      if(outcome.status==='completed' && (job.operation==='design_image' || (chatPreview && chatPreview.design_id===state.record?.design?.id)) && state.selected===job.conversation_id)drawDesign(state.record);
       const buildResult=outcome.result?.build || (job.operation==='design_build'?outcome.result:null);
       const reviewResult=outcome.result?.review;
       const revisionResult=outcome.result?.revision;
+      const editResult=outcome.result?.edit || (job.operation==='apply_edit'?outcome.result:null);
+      const editReview=outcome.result?.edit_review;
+      if(job.operation==='connection') {
+        const connection=outcome.result;
+        const text=outcome.status==='completed'?`Connected · ${connection.Minecraft} · ${connection.player_position.dimension} · world writes ${connection.world_write_available?'enabled':'disabled'}`:outcome.error.message;
+        $('game-status').textContent=outcome.status==='completed'?'Minecraft connected':'Minecraft disconnected';
+        $('settings-feedback').textContent=text;feedback(text,outcome.status==='completed'?'':'error');controls();return;
+      }
+      const wasEdit=job.operation==='apply_edit' || state.record?.edits?.some(item=>item.id===job.id);
       const wasBuild=job.operation==='design_build' || state.record?.builds?.some(item=>item.id===job.id);
-      const completedText=reviewResult?'Review the building description in chat. Confirm to build, or describe changes.':revisionResult?'Plan updated. Review the new version in the Design panel. No game blocks changed.':buildResult?`Construction completed at ${buildResult.origin.join(', ')}. ${buildResult.verified} blocks verified.`:job.operation==='design_plan'?'Plan saved. Review the preview or discuss revisions.':job.operation==='design_image' || chatPreview?'AI concept image saved. See the Design panel.':'Reply saved. Continue the conversation.';
+      const completedText=reviewResult?'Review the building description in chat. Confirm to build, or describe changes.':revisionResult?'Plan updated. Blueprint details are available in chat.':buildResult?`Construction completed at ${buildResult.origin.join(', ')}. ${buildResult.verified} blocks verified.`:job.operation==='design_plan'?'Plan saved. View blueprint details in chat or generate a concept image.':job.operation==='design_image' || chatPreview?'AI concept image saved. See the Design panel.':'Reply saved. Continue the conversation.';
       const stoppedText=wasBuild?'Construction stopped. Placed blocks remain.':job.operation==='chat'?'Reply stopped. Partial text is not used as context.':'Operation stopped. Saved results remain available.';
-      feedback(outcome.status==='completed'?completedText:outcome.status==='cancelled'?stoppedText:outcome.error.message,outcome.status==='failed'?'error':'');
+      const editText=editReview?'Review the edit summary. Confirm in chat or click Apply edit.':editResult?`Edit verified: ${editResult.changed} changed blocks; ${editResult.unchanged || 0} other blocks unchanged.`:null;
+      feedback(outcome.status==='completed'?(editText || completedText):outcome.status==='cancelled'?(wasEdit?'Edit stopped. Applied changes remain.':stoppedText):outcome.error.message,outcome.status==='failed'?'error':'');
       controls();if(state.selected===job.conversation_id)$('prompt').focus();
       return;
     }
     state.pollTimer=setTimeout(pollJob,180);
   } catch(error) {
+    if(error.http>=400 && error.http<500){
+      clearTimeout(state.pollTimer);state.active=null;state.busy=false;controls();
+      feedback(`${error.message} Reload MineCreator to recover saved status. This task was not resubmitted.`,'error');
+      return;
+    }
     feedback('Connection interrupted. Reconnecting to the same request; no new API request is sent.','error');
     state.pollTimer=setTimeout(pollJob,2000);
   }
@@ -286,7 +378,8 @@ async function submit(event) {
 }
 
 async function designAction(operation) {
-  if(state.busy || (operation!=='design_build' && !state.config?.configured))return;
+  if(state.busy || (!['design_build','apply_edit'].includes(operation) && !state.config?.configured))return;
+  if(operation==='apply_edit' && (!(state.record?.edit_review?.change_count>0) || $('prompt').value.trim()))return;
   if(operation==='design_plan' && (!state.record?.turns.some(turn=>turn.status==='completed') || $('prompt').value.trim()))return;
   if(operation==='design_image' && !state.record?.design)return;
   if(operation==='design_build' && (!state.record?.design || $('prompt').value.trim()))return;
@@ -294,8 +387,9 @@ async function designAction(operation) {
   const payload={conversation_id:state.selected,request_id:crypto.randomUUID().replaceAll('-','')};
   if(operation==='design_image' || operation==='design_build')payload.design_id=state.record.design.id;
   if(operation==='design_build')payload.confirmed=true;
+  if(operation==='apply_edit'){payload.confirmed=true;payload.review_id=state.record.edit_review.id;}
   try {
-    const job=await api(operation==='design_build'?'/api/build':operation==='design_plan'?'/api/plan':'/api/image',payload);
+    const job=await api(operation==='apply_edit'?'/api/apply-edit':operation==='design_build'?'/api/build':operation==='design_plan'?'/api/plan':'/api/image',payload);
     attachJob(job);await selectConversation(state.selected);
   }catch(error) {
     if(!error.http) {
@@ -306,11 +400,17 @@ async function designAction(operation) {
   }
 }
 $('generate-plan').onclick=()=>designAction('design_plan');
+$('apply-edit').onclick=()=>designAction('apply_edit');
+$('edit-target').onchange=async()=>{
+  if(state.busy)return;
+  const id=state.selected;state.busy=true;controls();
+  try{await api('/api/edit-target',{conversation_id:id,build_id:$('edit-target').value});if(state.selected===id)await selectConversation(id);feedback('Building selected. Ask for an in-game edit in chat.');}
+  catch(error){feedback(error.message,'error');}
+  finally{state.busy=false;controls();}
+};
 $('generate-image').onclick=()=>designAction('design_image');
 $('build').onclick=()=>designAction('design_build');
 $('build').addEventListener('contextmenu',event=>{event.preventDefault();if(!$('build').disabled)designAction('design_build');});
-$('blocks-tab').onclick=()=>{state.previewKind='blocks';drawDesign(state.record);};
-$('concept-tab').onclick=()=>{state.previewKind='concept';drawDesign(state.record);};
 $('close-preview').onclick=()=>{$('preview-dialog').close();};
 $('preview-dialog').addEventListener('close',()=>{if(state.chatPreviewUrl){URL.revokeObjectURL(state.chatPreviewUrl);state.chatPreviewUrl=null;}});
 $('chat-form').addEventListener('submit',submit);

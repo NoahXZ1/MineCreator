@@ -18,14 +18,16 @@ from .check_mcpfabric import MCPFabricClient, check_connection
 from .chat import ConversationStore, chat_reply, latest_design
 from .builds import build_design, review_design
 from .designs import generate_design, generate_design_image, revise_design
+from .edits import selected_build, prepare_edit, apply_edit
 from .modify_with_openai import current_blueprint, flatten, run as modify_build
 from .operations import OperationCancelled, OperationContext, OperationEvent
 from .plan_with_openai import ROOT, generate_plan, save_plan
 from .preview_plan import preview as render_preview
 from .preview_with_openai import IMAGE_MODEL, generate_preview
+from .settings import stored
 
 Operation = Literal['connection', 'generate_plan', 'voxel_preview', 'image_preview',
-                    'survey', 'build', 'modify', 'verify', 'chat', 'design_plan', 'design_image', 'design_build']
+                    'survey', 'build', 'modify', 'verify', 'chat', 'design_plan', 'design_image', 'design_build', 'apply_edit']
 
 
 @dataclass(frozen=True)
@@ -89,9 +91,10 @@ class MineCreatorBackend:
     """Use one shared instance per application; only one task runs at a time."""
 
     OPERATIONS = {'connection', 'generate_plan', 'voxel_preview', 'image_preview',
-                  'survey', 'build', 'modify', 'verify', 'chat', 'design_plan', 'design_image', 'design_build'}
+                  'survey', 'build', 'modify', 'verify', 'chat', 'design_plan', 'design_image', 'design_build', 'apply_edit'}
 
     def __init__(self, game_dir: Path | None = None):
+        self._explicit_game_dir = game_dir is not None
         self.game_dir = Path(game_dir).resolve() if game_dir is not None else (
             Path(os.environ['APPDATA']) / '.minecraft' if 'APPDATA' in os.environ else None)
         self._lock = Lock()
@@ -139,6 +142,10 @@ class MineCreatorBackend:
         task._future.set_result(outcome)
 
     def _client(self) -> MCPFabricClient:
+        if not self._explicit_game_dir:
+            configured = stored(ROOT).get('game_dir')
+            if configured:
+                self.game_dir = Path(configured)
         if self.game_dir is None:
             raise ValueError('Set the Minecraft game directory first.')
         return MCPFabricClient(self.game_dir, timeout=5)
@@ -153,11 +160,14 @@ class MineCreatorBackend:
                  origin: list[int] | None = None, confirmed: bool = False,
                  delay: float = 0.12, quality: str = 'low', image_model: str = IMAGE_MODEL,
                  conversation_id: str | None = None, request_id: str | None = None,
-                 design_id: str | None = None) -> dict:
+                 design_id: str | None = None, review_id: str | None = None) -> dict:
         ctx = context
         if operation == 'chat':
+            record = self.conversations.get(conversation_id)
+            target = selected_build(record)
+            pending_edit = record.get('edit_review')
             request_player = None
-            if self.conversations.get(conversation_id).get('build_review'):
+            if record.get('build_review') or pending_edit:
                 # Capture the request-time position before the model can take time
                 # deciding on a build. An unavailable game must not prevent chat.
                 ctx.report('Checking the player position for possible construction.', phase='request_position')
@@ -172,8 +182,22 @@ class MineCreatorBackend:
                 return review_design(self.conversations, conversation_id, request_id, revise_plan, ctx)
             def revise_plan():
                 return revise_design(self.conversations, conversation_id, request_id, ctx)
+            def review_edit():
+                return prepare_edit(self.conversations, conversation_id, request_id, prompt, ctx, prior_review=pending_edit)
+            def confirm_edit(review):
+                return apply_edit(self.conversations, conversation_id, request_id, review, self._client(), ctx,
+                                  request_player=request_player)
             return chat_reply(self.conversations, conversation_id, request_id, prompt, ctx,
-                              build_handler=start_build, review_handler=review_build, revision_handler=revise_plan)
+                              build_handler=start_build, review_handler=review_build, revision_handler=revise_plan,
+                              edit_target={key:target.get(key) for key in ('id','origin','dimension','design_id')} if target else None,
+                              edit_review_handler=review_edit if target else None,
+                              edit_apply_handler=confirm_edit if target else None)
+        if operation == 'apply_edit':
+            self._require_confirmation(confirmed)
+            review = self.conversations.get(conversation_id).get('edit_review')
+            if not review or review['id'] != review_id or review.get('change_count', 0) <= 0:
+                raise ValueError('Review the proposed edit before applying it.')
+            return apply_edit(self.conversations, conversation_id, request_id, review, self._client(), ctx)
         if operation == 'design_build':
             self._require_confirmation(confirmed)
             return build_design(self.conversations, conversation_id, design_id, request_id, self._client(), ctx)

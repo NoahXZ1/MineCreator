@@ -13,13 +13,16 @@ from openai import OpenAI, OpenAIError
 from pydantic import ValidationError
 
 if __package__:
+    from .paths import ROOT
+    from .settings import effective
     from .blueprint import Blueprint, expand_blueprint
     from .operations import OperationContext, operation_context
 else:
+    from paths import ROOT
+    from settings import effective
     from blueprint import Blueprint, expand_blueprint
     from operations import OperationContext, operation_context
 
-ROOT = Path(__file__).resolve().parents[1]
 INSTRUCTIONS = """You design small vanilla Minecraft structures using high-level components.
 Write every title, description, stage name, and stage description in English,
 even if the user request or the existing blueprint uses another language.
@@ -51,11 +54,10 @@ The program validates and expands your output before any later construction step
 
 def read_settings() -> tuple[str, str]:
     # Project-local settings take precedence over another project's shell settings.
-    settings = dotenv_values(ROOT / ".env", encoding="utf-8-sig", interpolate=False)
-    key = (settings.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", "")).strip()
-    model = (settings.get("OPENAI_MODEL") or os.environ.get("OPENAI_MODEL", "")).strip()
+    settings = effective(ROOT)
+    key, model = settings['key'], settings['model']
     if not key or key in ("your_api_key_here", "你的完整密钥"):
-        raise ValueError("Set OPENAI_API_KEY in the project .env file.")
+        raise ValueError("Add your OpenAI API key in Settings or the local .env file.")
     if not model:
         raise ValueError("Set OPENAI_MODEL in the project .env file.")
     return key, model

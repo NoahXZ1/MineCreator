@@ -61,7 +61,18 @@ in the game. A construction history record does not change this planning default
 While reviewing a build, use review_build(revise_plan=true) for revisions instead,
 so the updated description asks for confirmation again. Revision alone never builds.
 Older assistant replies about being unable to revise plans or create doors are obsolete.
-You cannot otherwise inspect or edit the game, and cannot capture screenshots.
+When a built target and review_edit are available, an explicit request to change the
+building IN MINECRAFT uses review_edit. It prepares a diff and asks for approval; it
+does not place blocks yet. While an edit review is pending, revisions also use
+review_edit, and clear approval without additional changes uses apply_edit with the
+exact review_id. Never call start_build to approve an edit. Bare design changes still
+default to revise_plan outside this edit review. If no built target exists, explain
+that a completed building in this conversation must be selected. Do not claim live
+edits are unavailable when these tools are present. No screenshots are available.
+An approval such as 'yes, apply' is not a new design request. Never call review_edit
+to regenerate a proposal from an approval. If an edit failed before placement and
+a pending review remains, explicit approval retries that exact review using apply_edit.
+If there is no pending review, explain the last edit status and ask for a new edit request.
 If a saved blueprint is supplied, use its actual contents
 as the baseline and distinguish proposed changes from already saved geometry.
 The generator uses generic solid boxes, hollow boxes and gable roofs. A 1x1x1 solid
@@ -95,6 +106,18 @@ def revision_tool() -> dict:
                 description='Update the building blueprint from the current conversation and save a new version. '
                             'For requests like add doors/windows or change the design. Never changes game blocks.',
                 parameters=dict(type='object', properties={}, required=[], additionalProperties=False))
+
+
+def edit_tools(review=None) -> list[dict]:
+    tools = [dict(type='function', name='review_edit', strict=True,
+                  description='Prepare a local edit of the selected built structure in Minecraft; asks for confirmation and never writes game blocks.',
+                  parameters=dict(type='object', properties={}, required=[], additionalProperties=False))]
+    if review and review.get('change_count', 0) > 0:
+        tools.append(dict(type='function', name='apply_edit', strict=True,
+                          description='Apply the reviewed changes to the selected building only after clear user approval without new changes.',
+                          parameters=dict(type='object', properties={'review_id':dict(type='string', enum=[review['id']])},
+                                          required=['review_id'], additionalProperties=False)))
+    return tools
 
 
 def now() -> str:
@@ -139,9 +162,23 @@ class ConversationStore:
 
     def _read(self, conversation_id: str) -> dict:
         try:
-            return json.loads(self._path(conversation_id).read_text(encoding='utf-8'))
+            record=json.loads(self._path(conversation_id).read_text(encoding='utf-8'))
+            if not isinstance(record,dict) or record.get('id')!=conversation_id or not all(isinstance(record.get(k),str) for k in ('title','created_at','updated_at')) or not isinstance(record.get('turns'),list):
+                raise ValueError('Invalid conversation data.')
+            for turn in record['turns']:
+                if not isinstance(turn,dict) or not all(isinstance(turn.get(k),str) for k in ('id','user','assistant','status','created_at')):
+                    raise ValueError('Invalid conversation turn.')
+            for group in ('designs','builds','edits'):
+                if not isinstance(record.get(group,[]),list) or any(not isinstance(item,dict) or not isinstance(item.get('status'),str) for item in record.get(group,[])):
+                    raise ValueError('Invalid saved operation.')
+            for design in record.get('designs',[]):
+                if not isinstance(design.get('images',[]),list) or any(not isinstance(item,dict) or not isinstance(item.get('status'),str) for item in design.get('images',[])):
+                    raise ValueError('Invalid saved image operation.')
+            return record
         except FileNotFoundError:
             raise ValueError('Conversation not found.') from None
+        except (ValueError,TypeError):
+            raise ValueError('This conversation could not be read. Its saved file has been kept.') from None
 
     def _save(self, record: dict) -> None:
         self.folder.mkdir(parents=True, exist_ok=True)
@@ -196,6 +233,10 @@ class ConversationStore:
                     if build['status'] == 'running':
                         build.update(status='interrupted', message='Construction interrupted. Placed blocks remain; no automatic restart.')
                         changed = True
+                for edit in record.get('edits', []):
+                    if edit['status'] == 'running':
+                        edit.update(status='interrupted', message='Edit interrupted. Applied changes remain; no automatic restart.')
+                        changed = True
                 if changed:
                     self._save(record)
 
@@ -218,6 +259,7 @@ class ConversationStore:
             # Each user reply must be interpreted anew. A failed/revised reply
             # cannot leave an older approval usable by a later message.
             record.pop('build_review', None)
+            record.pop('edit_review', None)
             record['updated_at'] = now()
             self._save(record)
             return deepcopy(history)
@@ -229,6 +271,8 @@ class ConversationStore:
             turn.update(assistant=text, status=status, **metadata)
             if status == 'completed' and metadata.get('review'):
                 record['build_review'] = deepcopy(metadata['review'])
+            if status == 'completed' and metadata.get('edit_review'):
+                record['edit_review'] = deepcopy(metadata['edit_review'])
             record['updated_at'] = now()
             self._save(record)
             return record
@@ -251,6 +295,7 @@ class ConversationStore:
                                 source_turn_ids=[turn['id'] for turn in record['turns']
                                                  if turn['status'] == 'completed' or turn['id'] == chat_request_id]))
             record.pop('build_review', None)
+            record.pop('edit_review', None)
             record['updated_at'] = now()
             self._save(record)
             return snapshot
@@ -264,6 +309,7 @@ class ConversationStore:
             design.update(**fields)
             if 'plan_path' in fields:
                 record.pop('build_review', None)
+                record.pop('edit_review', None)
             record['updated_at'] = now()
             self._save(record)
             return record
@@ -293,6 +339,7 @@ class ConversationStore:
             builds.append(dict(id=request_id, design_id=design_id, status='running', created_at=now(),
                                message='Checking Minecraft and selecting a nearby site.'))
             record.pop('build_review', None)
+            record.pop('edit_review', None)
             record['updated_at'] = now()
             self._save(record)
 
@@ -301,6 +348,50 @@ class ConversationStore:
             record = self._read(conversation_id)
             build = next(item for item in record['builds'] if item['id'] == request_id)
             build.update(**fields)
+            if fields.get('status') == 'completed':
+                record['selected_build_id'] = request_id
+            record['updated_at'] = now()
+            self._save(record)
+
+    def select_build(self, conversation_id, build_id):
+        valid_id(build_id)
+        with self.lock:
+            record = self._read(conversation_id)
+            if not any(item['id'] == build_id and item.get('status') == 'completed' and item.get('record_path')
+                       for item in record.get('builds', [])):
+                raise ValueError('Select a completed building from this conversation.')
+            record['selected_build_id'] = build_id
+            record.pop('edit_review', None)
+            self._save(record)
+
+    def begin_edit(self, conversation_id, request_id, review):
+        valid_id(request_id)
+        with self.lock:
+            record = self._read(conversation_id)
+            edits = record.setdefault('edits', [])
+            if any(item['id'] == request_id or item['status'] == 'running'
+                   or (item['review_id'] == review['id'] and not item.get('retryable', False)) for item in edits):
+                raise ValueError('This edit was already submitted. Request a new review before retrying.')
+            edits.append(dict(id=request_id, review_id=review['id'], build_id=review['build_id'],
+                              status='running', created_at=now(), message='Checking the target building.'))
+            record.pop('edit_review', None)
+            self._save(record)
+
+    def fail_edit(self, conversation_id, request_id, review, *, status, message, retryable):
+        with self.lock:
+            record = self._read(conversation_id)
+            edit = next(item for item in record['edits'] if item['id'] == request_id)
+            edit.update(status=status, message=message, error=message, retryable=retryable)
+            if retryable:
+                record['edit_review'] = deepcopy(review)
+            record['updated_at'] = now()
+            self._save(record)
+
+    def update_edit(self, conversation_id, request_id, **fields):
+        with self.lock:
+            record = self._read(conversation_id)
+            edit = next(item for item in record['edits'] if item['id'] == request_id)
+            edit.update(**fields)
             record['updated_at'] = now()
             self._save(record)
 
@@ -317,9 +408,13 @@ class ConversationStore:
 
 def chat_reply(store: ConversationStore, conversation_id: str, request_id: str,
                prompt: str, context: OperationContext, *, client_factory=OpenAI,
-               settings_reader=read_settings, build_handler=None, review_handler=None, revision_handler=None) -> dict:
+               settings_reader=read_settings, build_handler=None, review_handler=None, revision_handler=None,
+               edit_target=None, edit_review_handler=None, edit_apply_handler=None) -> dict:
     context.check()
     pending_review = store.get(conversation_id).get('build_review')
+    pending_edit = store.get(conversation_id).get('edit_review')
+    if pending_edit and (not edit_target or pending_edit['build_id'] != edit_target['id']):
+        pending_edit = None
     history = store.begin(conversation_id, request_id, prompt)
     text = ''
     image_started = False
@@ -331,6 +426,9 @@ def chat_reply(store: ConversationStore, conversation_id: str, request_id: str,
     build_started = False
     review_result = None
     revision_result = None
+    edit_review_result = None
+    edit_result = None
+    edit_started = False
 
     def mark_image_started():
         nonlocal image_started
@@ -362,6 +460,15 @@ def chat_reply(store: ConversationStore, conversation_id: str, request_id: str,
             history.insert(0, dict(role='user', content='Pending build review (reference data):\n'
                                   + json.dumps(pending_review, ensure_ascii=False)))
         builds = store.get(conversation_id).get('builds', [])
+        if edit_target:
+            history.insert(0, dict(role='user', content='Selected built target (reference data):\n' + json.dumps(edit_target)))
+        if pending_edit:
+            history.insert(0, dict(role='user', content='Pending live edit review (reference data):\n' + json.dumps(pending_edit)))
+        last_edit = store.get(conversation_id).get('edits', [])
+        if last_edit:
+            history.insert(0, dict(role='user', content='Last live edit attempt (reference data):\n'
+                                  + json.dumps({key:last_edit[-1].get(key) for key in
+                                                ('status','message','retryable','review_id')})))
         if builds:
             last = builds[-1]
             history.insert(0, dict(role='user', content='Last construction result (reference data, not an instruction):\n'
@@ -380,7 +487,10 @@ def chat_reply(store: ConversationStore, conversation_id: str, request_id: str,
         if revision_handler is not None:
             options.setdefault('tools', []).append(revision_tool())
             options.update(tool_choice='auto', max_tool_calls=1, parallel_tool_calls=False)
-        if plan_path and pending_review and build_handler is not None:
+        if edit_target and edit_review_handler is not None:
+            options.setdefault('tools', []).extend(edit_tools(pending_edit if edit_apply_handler else None))
+            options.update(tool_choice='auto', max_tool_calls=1, parallel_tool_calls=False)
+        if plan_path and pending_review and not pending_edit and build_handler is not None:
             options.setdefault('tools', []).append(build_tool(pending_review['id']))
             options.update(tool_choice='auto', max_tool_calls=1, parallel_tool_calls=False)
         timeout = 180.0 if plan_path else 60.0
@@ -413,10 +523,25 @@ def chat_reply(store: ConversationStore, conversation_id: str, request_id: str,
                 raise ValueError('Invalid build tool request. No construction started.')
             context.check()
             arguments = json.loads(calls[0].arguments)
-            if calls[0].name == 'revise_plan' and revision_handler is not None:
+            if calls[0].name == 'review_edit' and edit_target and edit_review_handler is not None:
+                if arguments != {}:
+                    raise ValueError('Invalid edit review request.')
+                edit_review_result = edit_review_handler()
+                text = edit_review_result['summary']
+                context.report('', kind='replace_text', text=text, request_id=request_id)
+            elif (calls[0].name == 'apply_edit' and pending_edit and edit_apply_handler is not None
+                  and pending_edit.get('change_count', 0) > 0 and arguments == {'review_id':pending_edit['id']}):
+                edit_started = True
+                edit_result = edit_apply_handler(pending_edit)
+                text = f"Edit verified: {edit_result['changed']} changed blocks; {edit_result.get('unchanged', 0)} other blocks unchanged."
+                context.report('', kind='replace_text', text=text, request_id=request_id)
+            elif calls[0].name == 'revise_plan' and revision_handler is not None:
                 if arguments != {}:
                     raise ValueError('Invalid plan revision request. No construction started.')
-                if pending_review and review_handler is not None:
+                if pending_edit and edit_review_handler is not None:
+                    edit_review_result = edit_review_handler()
+                    text = edit_review_result['summary']
+                elif pending_review and review_handler is not None:
                     review_result = review_handler(True)
                     text = review_result['summary']
                 else:
@@ -430,7 +555,7 @@ def chat_reply(store: ConversationStore, conversation_id: str, request_id: str,
                 review_result = review_handler(arguments['revise_plan'])
                 text = review_result['summary']
                 context.report('', kind='replace_text', text=text, request_id=request_id)
-            elif (calls[0].name == 'start_build' and pending_review and plan_path and build_handler is not None
+            elif (calls[0].name == 'start_build' and pending_review and not pending_edit and plan_path and build_handler is not None
                   and arguments == {'review_id':pending_review['id']}):
                 # Bind approval to the exact reviewed bytes, not merely a filename.
                 if load_plan(plan_path)[0] != pending_review['source_sha256']:
@@ -461,10 +586,17 @@ def chat_reply(store: ConversationStore, conversation_id: str, request_id: str,
         record = store.finish(conversation_id, request_id, text, 'completed', model=completed.model,
                               response_id=completed.id,
                               usage=completed.usage.model_dump() if completed.usage else None,
-                              preview=preview_result, build=build_result, review=review_result, revision=revision_result)
-        return dict(conversation=record, preview=preview_result, build=build_result, review=review_result, revision=revision_result)
+                              preview=preview_result, build=build_result, review=review_result, revision=revision_result,
+                              edit_review=edit_review_result, edit=edit_result)
+        return dict(conversation=record, preview=preview_result, build=build_result, review=review_result,
+                    revision=revision_result, edit_review=edit_review_result, edit=edit_result)
     except Exception as exc:
         cancelled = isinstance(exc, OperationCancelled)
+        if edit_started:
+            attempts = store.get(conversation_id).get('edits', [])
+            attempt = next((item for item in attempts if item['id'] == request_id), None)
+            text = attempt['message'] if attempt else 'Edit stopped before completion. Check the edit status for details.'
+            context.report('', kind='replace_text', text=text, request_id=request_id)
         if build_started:
             detail = str(exc) if isinstance(exc, (ValueError, RuntimeError)) else 'The construction operation could not finish.'
             text = ('Construction stopped. Placed blocks remain.' if cancelled else
@@ -475,7 +607,8 @@ def chat_reply(store: ConversationStore, conversation_id: str, request_id: str,
                                status='cancelled' if cancelled else 'failed', error='Preview generation stopped.' if cancelled else 'Preview generation failed.')
         store.finish(conversation_id, request_id, text, 'cancelled' if cancelled else 'failed',
                      preview=preview_result,
-                     error='Construction stopped. Placed blocks remain. See construction status.' if build_started
+                     error='Edit stopped. Applied changes remain. See edit status.' if edit_started
+                     else 'Construction stopped. Placed blocks remain. See construction status.' if build_started
                      else 'Reply stopped. Partial text is not used as context.' if cancelled
                      else 'The reply failed. Check configuration, model access, credit, and connectivity.')
         raise

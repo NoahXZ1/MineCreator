@@ -8,6 +8,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
+  <script src="/workbench.js" defer></script>
 </head>
 <body>
   <header class="topbar stone">
@@ -18,12 +19,30 @@
     <aside class="sidebar stone panel">
       <h2>Conversations</h2>
       <button id="new-chat" class="green new-chat"><span>＋</span>New chat</button>
+      <button id="open-library" class="library-entry">Building library</button>
       <nav id="conversations" aria-label="Saved conversations"></nav>
       <div class="sidebar-foot"><span class="status-dot"></span>Saved on this computer</div>
     </aside>
     <section class="chat panel" aria-label="Conversation">
       <header class="chat-header"><h2 id="chat-title">New conversation</h2><p>Build ideas, one block at a time.</p></header>
-      <div id="messages" class="messages" role="log" aria-label="Messages" aria-live="off"></div>
+      <div id="messages" class="messages" role="log" aria-label="Messages" aria-live="off">
+        <section id="conversation-details" class="conversation-details" aria-label="Design and construction updates" hidden>
+          <p id="design-notice" class="design-notice" role="status" hidden></p>
+          <section id="build-status" class="build-status" aria-label="Construction status" hidden>
+            <h3>Construction</h3><p id="build-location"></p><p id="build-message" role="status"></p>
+            <progress id="build-progress" max="1" aria-label="Current construction stage"></progress>
+          </section>
+          <section id="edit-target-panel" class="build-status" hidden>
+            <label for="edit-target">Built structure</label>
+            <select id="edit-target" aria-label="Building to edit"></select>
+            <p class="muted">Ask to change this building in Minecraft to review a live edit.</p>
+            <div id="edit-review" hidden><p id="edit-summary"></p><button id="apply-edit" class="green">Apply edit</button></div>
+            <div id="edit-status" hidden><p id="edit-message" role="status"></p><progress id="edit-progress" max="1" aria-label="Edit progress"></progress></div>
+          </section>
+          <details id="plan-summary" hidden><summary>Blueprint details</summary><div id="plan-details"></div></details>
+          <div id="reference-list" class="reference-list"></div>
+        </section>
+      </div>
       <div class="composer stone">
         <div id="feedback" class="feedback" role="status" aria-live="polite">Loading your workspace...</div>
         <form id="chat-form">
@@ -36,29 +55,41 @@
     <aside class="design stone panel">
       <h2>Design</h2>
       <div class="design-scroll">
-        <section id="build-status" class="build-status" aria-label="Construction status" hidden>
-          <h3>Construction</h3><p id="build-location"></p><p id="build-message" role="status"></p>
-          <progress id="build-progress" max="1" aria-label="Current construction stage"></progress>
-        </section>
-        <div id="preview-tabs" class="preview-tabs" hidden><button id="blocks-tab" class="selected">Blocks</button><button id="concept-tab" disabled>AI concept</button></div>
-        <div id="design-preview" class="design-preview"><img src="/icon.svg" alt="" width="64" height="64"><h3>Your next build starts here.</h3><p>Discuss the shape, materials,<br>and details in the conversation.</p><span class="tag">DESIGN WORKSPACE</span></div>
-        <p id="preview-caption" class="preview-caption">Discuss an idea, then generate a plan.</p>
-        <div id="plan-details" hidden></div>
-        <p id="design-notice" class="design-notice" role="status" hidden></p>
+        <div id="design-preview" class="design-preview"><img src="/icon.svg" alt="" width="64" height="64"><p>No concept image yet.</p></div>
+        <p id="design-status" class="preview-caption" role="status" aria-live="polite">Ready</p>
       </div>
-      <button id="generate-plan" class="green future" disabled><span>▤</span><span id="plan-button-label">Generate plan</span></button>
-      <button id="generate-image" class="future image-action" title="Generate one AI concept image through your API." hidden disabled>Generate AI image</button>
-      <button id="build" class="green future" title="Start building the saved plan nearby. Left-click or right-click." disabled><span>⚒</span>Build</button>
-      <p class="coming-next">Build starts now. Chat “start build” reviews first. May clear and level nearby terrain.</p>
+      <div class="design-actions">
+        <button id="generate-plan" class="green future" disabled><span>▤</span><span id="plan-button-label">Generate plan</span></button>
+        <div class="archive-actions"><button id="save-library" disabled>Save to library</button></div>
+        <button id="generate-image" class="future image-action" title="Generate one AI concept image through your API." hidden disabled>Generate AI image</button>
+        <button id="build" class="green future" title="Start building the saved plan nearby. Left-click or right-click." disabled><span>⚒</span>Build</button>
+      </div>
       <div class="model-card"><span class="eyebrow">CHAT MODEL</span><strong id="model">Loading...</strong><span id="api-state">Reading local settings</span></div>
     </aside>
   </main>
   <dialog id="settings-dialog">
     <div class="dialog-head"><h2>Settings</h2><button id="close-settings" class="icon-button" aria-label="Close settings">×</button></div>
-    <p>Chat uses the OpenAI configuration in this project's <code>.env</code> file.</p>
+    <label class="field">API key<input id="setting-api-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved key" maxlength="1024"></label>
+    <label class="check-field"><input id="setting-clear-key" type="checkbox"> Remove saved key</label>
+    <label class="field">Model<input id="setting-model" maxlength="100" placeholder="gpt-6-luna"></label>
+    <label class="field">Minecraft game directory<input id="setting-game-dir" placeholder="Select your .minecraft directory"></label>
+    <div class="dialog-actions"><button id="choose-game-dir">Browse</button><button id="check-connection">Check Minecraft</button></div>
     <dl><dt>Model</dt><dd id="settings-model">—</dd><dt>API key</dt><dd id="settings-key">—</dd><dt>Conversations</dt><dd>Saved locally in data/conversations/</dd></dl>
     <p class="muted">Send and Generate plan use the OpenAI API. Asking for a preview in chat can generate one AI image. Generate AI image is also available as a button. Block previews render locally. Requests are never retried automatically.</p>
-    <div class="dialog-actions"><button id="refresh-settings">Reload settings</button><button id="quit">Quit MineCreator</button></div>
+    <p id="settings-feedback" role="status"></p><p id="data-location" class="muted"></p>
+    <div class="dialog-actions"><button id="save-settings" class="green">Save settings</button><button id="refresh-settings">Reload</button><button id="quit">Quit MineCreator</button></div>
+  </dialog>
+  <dialog id="save-dialog"><div class="dialog-head"><h2>Save building version</h2><button id="close-save" aria-label="Close save dialog">×</button></div>
+    <label class="field">Building name<input id="archive-name" maxlength="120"></label>
+    <label class="field">Blueprint version<select id="archive-design"></select></label>
+    <label class="field">Save under<select id="archive-group"><option value="">New building</option></select></label>
+    <label class="field">Notes<textarea id="archive-notes" maxlength="8000" rows="3"></textarea></label>
+    <p class="muted">Copies the design conversation, all linked plans, previews, attached references and execution records. Existing archive versions stay unchanged.</p>
+    <p id="archive-feedback" role="status"></p><button id="confirm-save" class="green">Save version</button>
+  </dialog>
+  <dialog id="library-dialog" class="library-dialog"><div class="dialog-head"><h2>Building library</h2><button id="close-library" aria-label="Close library">×</button></div>
+    <div class="library-toolbar"><input id="library-search" type="search" placeholder="Search buildings or notes" aria-label="Search library"><button id="import-library">Import ZIP</button><input id="library-file" type="file" accept=".zip" hidden></div>
+    <p id="library-feedback" role="status"></p><div class="library-layout"><nav id="library-list" aria-label="Saved building versions"></nav><section id="library-detail"><p class="muted">Select a version to view its complete archive.</p></section></div>
   </dialog>
   <dialog id="preview-dialog" class="preview-dialog"><div class="dialog-head"><h2 id="preview-dialog-title">Block preview</h2><button id="close-preview" class="icon-button" aria-label="Close preview">×</button></div><img id="large-preview" alt="Building plan preview"><p id="large-caption" class="muted"></p></dialog>
 </body>

@@ -14,15 +14,18 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 if __package__:
+    from .paths import ROOT
     from .blueprint import Blueprint, MAX_PLACEMENTS, english_label, expand_blueprint
     from .check_mcpfabric import MCPFabricClient
     from .operations import OperationContext, operation_context
+    from .settings import atomic_json
 else:
+    from paths import ROOT
     from blueprint import Blueprint, MAX_PLACEMENTS, english_label, expand_blueprint
     from check_mcpfabric import MCPFabricClient
     from operations import OperationContext, operation_context
+    from settings import atomic_json
 
-ROOT = Path(__file__).resolve().parents[1]
 AIR = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air"}
 FLUIDS = {"minecraft:water", "minecraft:lava"}
 PLANTS = {"minecraft:" + name for name in (
@@ -278,7 +281,7 @@ def run(plan_path: Path, client: MCPFabricClient, requested_origin: list[int] | 
 
     def save():
         # Progress only: no world copy, old block snapshot, or automatic rollback.
-        log_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_json(log_path,record)
 
     def params(position):
         return dict(x=position[0], y=position[1], z=position[2], dimension=dimension)
